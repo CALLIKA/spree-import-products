@@ -1,3 +1,4 @@
+# coding: utf-8
 # This model is the master routine for uploading products
 # Requires Paperclip and CSV to upload the CSV file and read it nicely.
 
@@ -9,7 +10,11 @@ class ProductImport < ActiveRecord::Base
   has_attached_file :data_file, :path => ":rails_root/lib/etc/product_data/data-files/:basename.:extension"
   validates_attachment_presence :data_file
 
-  require 'csv'
+  require 'rubygems'
+  require 'zip/zip'
+  require 'nokogiri'
+  require 'fileutils'
+
   require 'pp'
   require 'open-uri'
 
@@ -20,70 +25,61 @@ class ProductImport < ActiveRecord::Base
   # Meta keywords and description are created on the product model
 
   def import_data!
-    begin
-      #Get products *before* import -
-      @products_before_import = Product.all
-      @names_of_products_before_import = []
-      @products_before_import.each do |product|
-        @names_of_products_before_import << product.name
-      end
-      log("#{@names_of_products_before_import}")
+      log("Import Start\n")
+      # extract
+      unzip_file(self.data_file.path, IMPORT_PRODUCT_SETTINGS[:unzip_folder_path])
+      f_name = File.basename(self.data_file.path, ".zip")
+      path_to_xml = "#{IMPORT_PRODUCT_SETTINGS[:unzip_folder_path]}#{f_name}/import.xml"
+      log("Path to XML file: #{path_to_xml}\n")
+      if File.exist?(path_to_xml) && File.readable?(path_to_xml)
+	begin
+	  log("File exists and readable\n")
+          doc = Nokogiri::XML(File.open(path_to_xml))
 
-      rows = CSV.read(self.data_file.path)
+	  #Get products *before* import -
+	  @products_before_import = Product.all
+	  @names_of_products_before_import = []
+	  @products_before_import.each do |product|
+	    @names_of_products_before_import << product.sku
+	  end
 
-      if IMPORT_PRODUCT_SETTINGS[:first_row_is_headings]
-        col = get_column_mappings(rows[0])
-      else
-        col = IMPORT_PRODUCT_SETTINGS[:column_mappings]
-      end
+	  taxonomy = doc.xpath("//Классификатор")
+	  groups_source = taxonomy.xpath("Группы")
+	  @groups = {}
+	  add_groups_recourse(groups_source, 0, @groups)
 
-      log("Importing products for #{self.data_file_file_name} began at #{Time.now}")
-      rows[IMPORT_PRODUCT_SETTINGS[:rows_to_skip]..-1].each do |row|
-        product_information = {}
+	  doc.xpath("//Каталог/Товары/Товар").each do |product|
+	    product_information = {}
+	    product_information[:sku] = product.xpath("Ид").text
+	    product_information[:name] = product.xpath("Наименование").text
+	    product_information[:master_price] = 0
+	    product_information[:description] = product.xpath("ПолноеНаименование").text
+	    product_information[:available_on] = DateTime.now - 1.day if product_information[:available_on].nil?
+	    product_information[:images] = []
+	    product_information[:taxonomy] = []
 
-        #Automatically map 'mapped' fields to a collection of product information.
-        #NOTE: This code will deal better with the auto-mapping function - i.e. if there
-        #are named columns in the spreadsheet that correspond to product
-        # and variant field names.
-        col.each do |key, value|
-          product_information[key] = row[value]
-        end
+	    product.xpath("Группы/Ид").each do |product_group|
+	    	product_information[:taxonomy] << product_group.text
+	    end
 
+	    product.xpath("Картинка").each do |image|
+		log("#{IMPORT_PRODUCT_SETTINGS[:unzip_folder_path]}#{f_name}/#{image.text}")
+	    	product_information[:images] << "#{IMPORT_PRODUCT_SETTINGS[:unzip_folder_path]}#{f_name}/#{image.text}"
+	    end
 
-        #Manually set available_on if it is not already set
-        product_information[:available_on] = DateTime.now - 1.day if product_information[:available_on].nil?
-
-
-        #Trim whitespace off the beginning and end of row fields
-        row.each do |r|
-          next unless r.is_a?(String)
-          r.gsub!(/\A\s*/, '').chomp!
-        end
-
-        if IMPORT_PRODUCT_SETTINGS[:create_variants]
-          field = IMPORT_PRODUCT_SETTINGS[:variant_comparator_field].to_s
-          if p = Product.find(:first, :conditions => ["#{field} = ?", row[col[field.to_sym]]])
-            p.update_attribute(:deleted_at, nil) if p.deleted_at #Un-delete product if it is there
-            p.variants.each { |variant| variant.update_attribute(:deleted_at, nil) }
-            create_variant_for(p, :with => product_information)
-          else
-            next unless create_product_using(product_information)
-          end
-        else
-          next unless create_product_using(product_information)
-        end
+	    next unless create_product_using(product_information)
+	  end
+	rescue => error
+		log(error, :error)
+	end
       end
 
-      if IMPORT_PRODUCT_SETTINGS[:destroy_original_products]
-        @products_before_import.each { |p| p.destroy }
-      end
-
-      log("Importing products for #{self.data_file_file_name} completed at #{DateTime.now}")
-
-    rescue Exception => exp
-      log("An error occurred during import, please check file and try again. (#{exp.message})\n#{exp.backtrace.join('\n')}", :error)
-      raise Exception(exp.message)
-    end
+      begin
+        File.delete(self.data_file.path)
+	FileUtils.rm_rf("#{IMPORT_PRODUCT_SETTINGS[:unzip_folder_path]}#{f_name}")
+      rescue => error
+	log("Can not remove source archive and unarchived folder [#{error}]",:error)
+      end	
 
     #All done!
     return [:notice, "Product data was successfully imported."]
@@ -92,58 +88,29 @@ class ProductImport < ActiveRecord::Base
 
   private
 
+  # source should be a zip file.
+  # target should be a directory to output the contents to.
+  def unzip_file (file, destination)
+    Zip::ZipFile.open(file) { |zip_file|
+     zip_file.each { |f|
+       f_path=File.join(destination, f.name)
+       FileUtils.mkdir_p(File.dirname(f_path))
+       zip_file.extract(f, f_path) unless File.exist?(f_path)
+     }
+    }
+  end
 
-  # create_variant_for
-  # This method assumes that some form of checking has already been done to
-  # make sure that we do actually want to create a variant.
-  # It performs a similar task to a product, but it also must pick up on
-  # size/color options
-  def create_variant_for(product, options = {:with => {}})
-    return if options[:with].nil?
-    variant = product.variants.new
-
-    #Remap the options - oddly enough, Spree's product model has master_price and cost_price, while
-    #variant has price and cost_price.
-    options[:with][:price] = options[:with].delete(:master_price)
-
-    #First, set the primitive fields on the object (prices, etc.)
-    options[:with].each do |field, value|
-      variant.send("#{field}=", value) if variant.respond_to?("#{field}=")
-      applicable_option_type = OptionType.find(:first, :conditions => [
-        "lower(presentation) = ? OR lower(name) = ?",
-        field.to_s, field.to_s]
-      )
-      if applicable_option_type.is_a?(OptionType)
-        product.option_types << applicable_option_type unless product.option_types.include?(applicable_option_type)
-        variant.option_values << applicable_option_type.option_values.find(
-          :all,
-          :conditions => ["presentation = ? OR name = ?", value, value]
-        )
-      end
-    end
-
-
-    if variant.valid?
-      variant.save
-
-      #Associate our new variant with any new taxonomies
-      IMPORT_PRODUCT_SETTINGS[:taxonomy_fields].each do |field|
-        associate_product_with_taxon(variant.product, field.to_s, options[:with][field.to_sym])
-      end
-
-      #Finally, attach any images that have been specified
-      IMPORT_PRODUCT_SETTINGS[:image_fields].each do |field|
-        find_and_attach_image_to(variant, options[:with][field.to_sym])
-      end
-
-      #Log a success message
-      log("Variant of SKU #{variant.sku} successfully imported.\n")
-    else
-      log("A variant could not be imported - here is the information we have:\n" +
-          "#{pp options[:with]}, :error")
-      return false
+  ## recourse method for creating hierarhy of groups (taxons)
+  def add_groups_recourse(current_groups, parent_group, groups_hash)
+    current_groups.xpath("Группа").each do |group|
+      name = group.xpath("Наименование").text
+      id = group.xpath("Ид").text
+      groups_hash[id] = name
+      log("#{parent_group}: #{id} => #{name}")
+      add_groups_recourse(group.xpath("Группы"), parent_group + 1, groups_hash)
     end
   end
+
 
 
   # create_product_using
@@ -157,7 +124,9 @@ class ProductImport < ActiveRecord::Base
     # into the product (including images and taxonomies).
     # What this does is only assigns values to products if the product accepts that field.
     params_hash.each do |field, value|
-      product.send("#{field}=", value) if product.respond_to?("#{field}=")
+      if field != :images && field != :taxonomy
+        product.send("#{field}=", value) if product.respond_to?("#{field}=")
+      end
     end
 
     after_product_built(product, params_hash)
@@ -174,61 +143,28 @@ class ProductImport < ActiveRecord::Base
 
     #This should be caught by code in the main import code that checks whether to create
     #variants or not. Since that check can be turned off, however, we should double check.
-    if @names_of_products_before_import.include? product.name
-      log("#{product.name} is already in the system.\n")
-    else
+    #if @names_of_products_before_import.include? product.sku
+    #  log("#{product.name} is already in the system (sku: #{product.sku}).\n")
+    #else
       #Save the object before creating asssociated objects
       product.save
 
 
       #Associate our new product with any taxonomies that we need to worry about
-      IMPORT_PRODUCT_SETTINGS[:taxonomy_fields].each do |field|
-        associate_product_with_taxon(product, field.to_s, params_hash[field.to_sym])
-      end
+      #IMPORT_PRODUCT_SETTINGS[:taxonomy_fields].each do |field|
+      #  associate_product_with_taxon(product, field.to_s, params_hash[field.to_sym])
+      #end
 
       #Finally, attach any images that have been specified
-      IMPORT_PRODUCT_SETTINGS[:image_fields].each do |field|
-        find_and_attach_image_to(product, params_hash[field.to_sym])
-      end
-
-      if IMPORT_PRODUCT_SETTINGS[:multi_domain_importing] && product.respond_to?(:stores)
-        begin
-          store = Store.find(
-            :first,
-            :conditions => ["id = ? OR code = ?",
-              params_hash[IMPORT_PRODUCT_SETTINGS[:store_field]],
-              params_hash[IMPORT_PRODUCT_SETTINGS[:store_field]]
-            ]
-          )
-
-          product.stores << store
-        rescue
-          log("#{product.name} could not be associated with a store. Ensure that Spree's multi_domain extension is installed and that fields are mapped to the CSV correctly.")
-        end
+      params_hash[:images].each do |field|
+        find_and_attach_image_to(product, field)
       end
 
       #Log a success message
       log("#{product.name} successfully imported.\n")
-    end
+    #end
     return true
   end
-
-  # get_column_mappings
-  # This method attempts to automatically map headings in the CSV files
-  # with fields in the product and variant models.
-  # If the headings of columns are going to be called something other than this,
-  # or if the files will not have headings, then the manual initializer
-  # mapping of columns must be used.
-  # Row is an array of headings for columns - SKU, Master Price, etc.)
-  # @return a hash of symbol heading => column index pairs
-  def get_column_mappings(row)
-    mappings = {}
-    row.each_with_index do |heading, index|
-      mappings[heading.downcase.gsub(/\A\s*/, '').chomp.gsub(/\s/, '_').to_sym] = index
-    end
-    mappings
-  end
-
 
   ### MISC HELPERS ####
 
@@ -267,7 +203,7 @@ class ProductImport < ActiveRecord::Base
   # images, and the file is accessible to the script.
   # It is basically just a wrapper around basic File IO methods.
   def fetch_local_image(filename)
-    filename = IMPORT_PRODUCT_SETTINGS[:product_image_path] + filename
+    #filename = IMPORT_PRODUCT_SETTINGS[:product_image_path] + filename
     unless File.exists?(filename) && File.readable?(filename)
       log("Image #{filename} was not found on the server, so this image was not imported.", :warn)
       return nil

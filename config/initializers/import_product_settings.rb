@@ -1,19 +1,24 @@
 # This file is the thing you have to config to match your application
 
 IMPORT_PRODUCT_SETTINGS = {
+  :unzip_folder_path => "#{Rails.root}/lib/etc/product_data/unzip_folder/",
+
   :column_mappings => { #Change these for manual mapping of product fields to the CSV file
     :sku => 0, 
     :name => 1,
     :master_price => 2,
+
     :cost_price => 3, 
     :weight => 4, 
     :height => 5,
     :width => 6,
     :depth => 7,
+
     :image_main => 8,
     :image_2 => 9,
     :image_3 => 10,
     :image_4 => 11,
+
     :description => 12,
     :category => 13
   },
@@ -27,7 +32,5 @@ IMPORT_PRODUCT_SETTINGS = {
   :first_row_is_headings => true, #Reads column names from first row if set to true.
   :create_variants => true, #Compares products and creates a variant if that product already exists.
   :variant_comparator_field => :permalink, #Which product field to detect duplicates on
-  :multi_domain_importing => true, #If Spree's multi_domain extension is installed, associates products with store
-  :store_field => :store_code #Which field of the column mappings contains either the store id or store code?
 }
 
