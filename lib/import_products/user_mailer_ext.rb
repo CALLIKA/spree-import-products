@@ -1,3 +1,4 @@
+# coding: utf-8
 module ImportProducts
   module UserMailerExt
     def self.included(base)
@@ -6,7 +7,7 @@ module ImportProducts
           @user = user
           @error_message = error_message
           attachments["import_products.log"] = File.read(IMPORT_PRODUCT_SETTINGS[:log_to]) if @error_message.nil?
-          mail(:to => @user.email, :subject => "Spree: Import Products #{error_message.nil? ? "Success" : "Failure"}")
+          mail(:to => @user.email, :subject => "Импорт продуктов: #{error_message.nil? ? "Успешно" : "Ошибка"}")
         end     
       end
     end

@@ -41,12 +41,15 @@ class ProductImport < ActiveRecord::Base
 	  @names_of_products_before_import = []
 	  @products_before_import.each do |product|
 	    @names_of_products_before_import << product.sku
+	    log("#{product.sku} #{product.name}")
 	  end
 
 	  taxonomy = doc.xpath("//Классификатор")
 	  groups_source = taxonomy.xpath("Группы")
 	  @groups = {}
-	  add_groups_recourse(groups_source, 0, @groups)
+	  add_groups_recourse(groups_source, nil, @groups)
+	  taxonomy_import(@groups)
+	  #log(@groups)
 
 	  doc.xpath("//Каталог/Товары/Товар").each do |product|
 	    product_information = {}
@@ -63,7 +66,7 @@ class ProductImport < ActiveRecord::Base
 	    end
 
 	    product.xpath("Картинка").each do |image|
-		log("#{IMPORT_PRODUCT_SETTINGS[:unzip_folder_path]}#{f_name}/#{image.text}")
+		#log("#{IMPORT_PRODUCT_SETTINGS[:unzip_folder_path]}#{f_name}/#{image.text}")
 	    	product_information[:images] << "#{IMPORT_PRODUCT_SETTINGS[:unzip_folder_path]}#{f_name}/#{image.text}"
 	    end
 
@@ -105,9 +108,13 @@ class ProductImport < ActiveRecord::Base
     current_groups.xpath("Группа").each do |group|
       name = group.xpath("Наименование").text
       id = group.xpath("Ид").text
-      groups_hash[id] = name
-      log("#{parent_group}: #{id} => #{name}")
-      add_groups_recourse(group.xpath("Группы"), parent_group + 1, groups_hash)
+      groups_hash[id] = []
+      unless(parent_group == nil)
+	groups_hash[id] = groups_hash[id] + groups_hash[parent_group]
+      end
+      groups_hash[id] << name
+      log("#{id} => #{groups_hash[id]}")
+      add_groups_recourse(group.xpath("Группы"), id, groups_hash)
     end
   end
 
@@ -151,9 +158,7 @@ class ProductImport < ActiveRecord::Base
 
 
       #Associate our new product with any taxonomies that we need to worry about
-      #IMPORT_PRODUCT_SETTINGS[:taxonomy_fields].each do |field|
-      #  associate_product_with_taxon(product, field.to_s, params_hash[field.to_sym])
-      #end
+      associate_product_with_taxon(product, IMPORT_PRODUCT_SETTINGS[:taxonomy_name], params_hash[:taxonomy])
 
       #Finally, attach any images that have been specified
       params_hash[:images].each do |field|
@@ -246,19 +251,33 @@ class ProductImport < ActiveRecord::Base
     # the taxonomy name, so unless we are using MySQL, this isn't going to work.
     taxonomy_name = taxonomy
     taxonomy = Taxonomy.find(:first, :conditions => ["lower(name) = ?", taxonomy])
-    taxonomy = Taxonomy.create(:name => taxonomy_name.capitalize) if taxonomy.nil? && IMPORT_PRODUCT_SETTINGS[:create_missing_taxonomies]
+    taxonomy = Taxonomy.create(:name => taxonomy_name.capitalize) if taxonomy.nil?
+    taxon_hierarchy.each do |hierarchy|
+      last_taxon = taxonomy.root
+      if @groups.has_key?(hierarchy)
+        @groups[hierarchy].each do |taxon|
+          last_taxon = last_taxon.children.find_or_create_by_name_and_taxonomy_id(taxon, taxonomy.id)
+        end
+        #Spree only needs to know the most detailed taxonomy item
+        product.taxons << last_taxon unless product.taxons.include?(last_taxon)
+      end
+    end
+  end
 
-    taxon_hierarchy.split(/\s*\&\s*/).each do |hierarchy|
-      hierarchy = hierarchy.split(/\s*>\s*/)
+
+  def taxonomy_import(groups)
+    taxonomy = IMPORT_PRODUCT_SETTINGS[:taxonomy_name]
+    taxonomy_name = taxonomy
+    taxonomy = Taxonomy.find(:first, :conditions => ["lower(name) = ?", taxonomy])
+    taxonomy = Taxonomy.create(:name => taxonomy_name.capitalize) if taxonomy.nil?
+    groups.each do |key, hierarchy|
       last_taxon = taxonomy.root
       hierarchy.each do |taxon|
         last_taxon = last_taxon.children.find_or_create_by_name_and_taxonomy_id(taxon, taxonomy.id)
       end
-
-      #Spree only needs to know the most detailed taxonomy item
-      product.taxons << last_taxon unless product.taxons.include?(last_taxon)
     end
   end
+
   ### END TAXON HELPERS ###
 
   # May be implemented via decorator if useful:
