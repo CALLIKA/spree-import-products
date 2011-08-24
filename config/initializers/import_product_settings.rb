@@ -27,5 +27,6 @@ IMPORT_PRODUCT_SETTINGS = {
   :log_to => File.join(Rails.root, '/log/', "import_products_#{Rails.env}.log"), #Where to log to
   :destroy_original_products => false, #Delete the products originally in the database after the import?
   :taxonomy_name => 'Тип товара'
+  :mail_from => 'mailer@zoo61.ru'
 }
 
