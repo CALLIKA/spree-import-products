@@ -26,7 +26,7 @@ IMPORT_PRODUCT_SETTINGS = {
   :create_missing_taxonomies => true,
   :log_to => File.join(Rails.root, '/log/', "import_products_#{Rails.env}.log"), #Where to log to
   :destroy_original_products => false, #Delete the products originally in the database after the import?
-  :taxonomy_name => 'Тип товара'
+  :taxonomy_name => 'Тип товара',
   :mail_from => 'mailer@zoo61.ru'
 }
 
