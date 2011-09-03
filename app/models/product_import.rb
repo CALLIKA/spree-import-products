@@ -34,15 +34,7 @@ class ProductImport < ActiveRecord::Base
       if File.exist?(path_to_xml) && File.readable?(path_to_xml)
 	begin
 	  log("File exists and readable\n")
-          doc = Nokogiri::XML(File.open(path_to_xml))
-
-	  #Get products *before* import -
-	  @products_before_import = Product.all
-	  @names_of_products_before_import = []
-	  @products_before_import.each do |product|
-	    @names_of_products_before_import << product.sku
-	    log("#{product.sku} #{product.name}")
-	  end
+          doc = Nokogiri::XML(File.open(path_to_xml))	
 
 	  taxonomy = doc.xpath("//Классификатор")
 	  groups_source = taxonomy.xpath("Группы")
@@ -57,7 +49,7 @@ class ProductImport < ActiveRecord::Base
 	    product_information[:name] = product.xpath("Наименование").text
 	    product_information[:master_price] = 0
 	    product_information[:description] = product.xpath("ПолноеНаименование").text
-	    product_information[:available_on] = DateTime.now - 1.day if product_information[:available_on].nil?
+	    product_information[:available_on] = DateTime.now - 1.day# if product_information[:available_on].nil?
 	    product_information[:images] = []
 	    product_information[:taxonomy] = []
 
@@ -125,49 +117,74 @@ class ProductImport < ActiveRecord::Base
   # product we have gathered, and creating the product and related objects.
   # It also logs throughout the method to try and give some indication of process.
   def create_product_using(params_hash)
-    product = Product.new
+####################################################################
+####################################################################
+####################################################################
+     variants_to_update = Variant.where(:sku => params_hash[:sku]).all
+     if (variants_to_update.size == 0) 
+	begin
+	#need create new product
+	log("Creating new product...")
+	product = Product.new
 
-    #The product is inclined to complain if we just dump all params
-    # into the product (including images and taxonomies).
-    # What this does is only assigns values to products if the product accepts that field.
-    params_hash.each do |field, value|
-      if field != :images && field != :taxonomy
-        product.send("#{field}=", value) if product.respond_to?("#{field}=")
-      end
-    end
+	#Log which product we're processing
+	log(params_hash[:name])
 
-    after_product_built(product, params_hash)
+	#The product is inclined to complain if we just dump all params
+	# What this does is only assigns values to products if the product accepts that field.
+	params_hash.each do |field, value|
+		if field != :images && field != :taxonomy
+			product.send("#{field}=", value) if product.respond_to?("#{field}=")
+		end
+	end
 
-    #We can't continue without a valid product here
-    unless product.valid?
-      log("A product could not be imported - here is the information we have:\n" +
-          "#{pp params_hash}, :error")
-      return false
-    end
+	#We can't continue without a valid product here
+	unless product.valid?
+		log("A product could not be imported - here is the information we have:\n" +
+		  "#{pp params_hash}, :error")
+		return false
+	end
+	
+	product.save
 
-    #Just log which product we're processing
-    log(product.name)
+	#Associate our new product with any taxonomies that we need to worry about
+	associate_product_with_taxon(product, IMPORT_PRODUCT_SETTINGS[:taxonomy_name], params_hash[:taxonomy])
 
-    #This should be caught by code in the main import code that checks whether to create
-    #variants or not. Since that check can be turned off, however, we should double check.
-    #if @names_of_products_before_import.include? product.sku
-    #  log("#{product.name} is already in the system (sku: #{product.sku}).\n")
-    #else
-      #Save the object before creating asssociated objects
-      product.save
+	#Finally, attach any images that have been specified
+	params_hash[:images].each do |field|
+		find_and_attach_image_to(product, field)
+	end
 
+	#Log a success message
+	log("#{product.name} successfully imported.\n")
+     end
+     else
+	#need update old product
+	log("Updating old products...")
+	variants_to_update.each { |variant|
+		product = Product.where(:id => variant.product_id).first
+		#Log which product we're processing
+		log(product.name)
+		params_hash.each do |field, value|
+			if field != :images && field != :taxonomy
+				product.send("#{field}=", value) if product.respond_to?("#{field}=")
+			end
+		end
+		product.deleted_at = nil
 
-      #Associate our new product with any taxonomies that we need to worry about
-      associate_product_with_taxon(product, IMPORT_PRODUCT_SETTINGS[:taxonomy_name], params_hash[:taxonomy])
-
-      #Finally, attach any images that have been specified
-      params_hash[:images].each do |field|
-        find_and_attach_image_to(product, field)
-      end
-
-      #Log a success message
-      log("#{product.name} successfully imported.\n")
-    #end
+		#We can't continue without a valid product here
+		unless product.valid?
+			log("A product could not be updated - here is the information we have:\n" +
+			  "#{pp params_hash}, :error")
+		end
+		
+		product.save
+		log("Updated")		
+	}
+     end
+####################################################################
+####################################################################
+####################################################################
     return true
   end
 
