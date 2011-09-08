@@ -48,13 +48,20 @@ class ProductImport < ActiveRecord::Base
 	    product_information[:sku] = product.xpath("Ид").text
 	    product_information[:name] = product.xpath("Наименование").text
 	    product_information[:master_price] = 0
+	    #by default get description from full name	
 	    product_information[:description] = product.xpath("ПолноеНаименование").text
 	    product_information[:available_on] = DateTime.now - 1.day# if product_information[:available_on].nil?
 	    product_information[:images] = []
 	    product_information[:taxonomy] = []
 
-	    product.xpath("Группы/Ид").each do |product_group|
-	    	product_information[:taxonomy] << product_group.text
+	    product.xpath("ЗначенияРеквизитов/ЗначениеРеквизита").each do |product_attr|
+		attr_name = product_attr.xpath("Наименование").text
+		attr_value = product_attr.xpath("Значение").text
+		product_information[:description] = attr_value if attr_name == "ОписаниеВФорматеHTML"
+	    end
+
+	    product.xpath("Таксоны/Таксон").each do |product_group|
+	    	product_information[:taxonomy] << product_group["ИД"]
 	    end
 
 	    product.xpath("Картинка").each do |image|
