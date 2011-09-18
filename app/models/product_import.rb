@@ -46,7 +46,8 @@ class ProductImport < ActiveRecord::Base
 	  doc.xpath("//Каталог/Товары/Товар").each do |product|
 	    product_information = {}
 	    product_information[:sku] = product.xpath("Ид").text
-	    product_information[:name] = product.xpath("Наименование").text
+	    product_information[:name] = product.xpath("ПолноеНаименование").text
+	    #product_information[:name] = product.xpath("Наименование").text
 	    product_information[:master_price] = 0
 	    #by default get description from full name	
 	    product_information[:description] = product.xpath("ПолноеНаименование").text
