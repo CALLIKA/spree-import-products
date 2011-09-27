@@ -1,10 +1,4 @@
 # coding: utf-8
-# This model is the master routine for uploading products
-# Requires Paperclip and CSV to upload the CSV file and read it nicely.
-
-# Original Author:: Josh McArthur
-# Author:: Chetan Mittal
-# License:: MIT
 
 class ProductImport < ActiveRecord::Base
   has_attached_file :data_file, :path => ":rails_root/lib/etc/product_data/data-files/:basename.:extension"
@@ -18,17 +12,36 @@ class ProductImport < ActiveRecord::Base
   require 'pp'
   require 'open-uri'
 
-  ## Data Importing:
-  # List Price maps to Master Price, Current MAP to Cost Price, Net 30 Cost unused
-  # Width, height, Depth all map directly to object
-  # Image main is created independtly, then each other image also created and associated with the product
-  # Meta keywords and description are created on the product model
-
   def import_data!
       log("Import Start\n")
       # extract
       unzip_file(self.data_file.path, IMPORT_PRODUCT_SETTINGS[:unzip_folder_path])
       f_name = File.basename(self.data_file.path, ".zip")
+
+
+      path_to_offers = "#{IMPORT_PRODUCT_SETTINGS[:unzip_folder_path]}#{f_name}/offers.xml"
+      log("Path to offers file: #{path_to_offers}\n")
+      offers = {}
+      if File.exist?(path_to_offers) && File.readable?(path_to_offers)
+	begin
+	  log("File exists and readable\n")
+          doc = Nokogiri::XML(File.open(path_to_offers))	
+	  doc.xpath("//ПакетПредложений/Предложения/Предложение").each do |offer|
+		id = offer.xpath("Ид").text
+		offers[id] = {}
+		offers[id][:number] = offer.xpath("Количество").text
+		offer.xpath("Цены/Цена").each do |price|
+		  if price.xpath("Валюта").text == "RUB"
+		      offers[id][:price] = price.xpath("ЦенаЗаЕдиницу").text
+		  end
+		end
+	  end
+	rescue => error
+		log(error, :error)
+	end
+	log(offers, :info)
+      end
+	
       path_to_xml = "#{IMPORT_PRODUCT_SETTINGS[:unzip_folder_path]}#{f_name}/import.xml"
       log("Path to XML file: #{path_to_xml}\n")
       if File.exist?(path_to_xml) && File.readable?(path_to_xml)
@@ -41,14 +54,23 @@ class ProductImport < ActiveRecord::Base
 	  @groups = {}
 	  add_groups_recourse(groups_source, nil, @groups)
 	  taxonomy_import(@groups)
-	  #log(@groups)
 
 	  doc.xpath("//Каталог/Товары/Товар").each do |product|
 	    product_information = {}
 	    product_information[:sku] = product.xpath("Ид").text
 	    product_information[:name] = product.xpath("ПолноеНаименование").text
-	    #product_information[:name] = product.xpath("Наименование").text
+	    #product_information[:name] = product.xpath("Наименование").text	
 	    product_information[:master_price] = 0
+	    if offers.has_key?(product_information[:sku])
+	      if (offers[product_information[:sku]].has_key?(:price))
+		price = offers[product_information[:sku]][:price]
+		product_information[:master_price] = price.to_f
+	      end
+	      if (offers[product_information[:sku]].has_key?(:number))
+		number = offers[product_information[:sku]][:number]
+		product_information[:on_hand] = number.to_f
+	      end	      
+	    end
 	    #by default get description from full name	
 	    product_information[:description] = product.xpath("ПолноеНаименование").text
 	    product_information[:available_on] = DateTime.now - 1.day# if product_information[:available_on].nil?
