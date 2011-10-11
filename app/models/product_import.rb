@@ -29,10 +29,17 @@ class ProductImport < ActiveRecord::Base
 	  doc.xpath("//ПакетПредложений/Предложения/Предложение").each do |offer|
 		id = offer.xpath("Ид").text
 		offers[id] = {}
-		offers[id][:number] = offer.xpath("Количество").text
+		offers[id][:number] = 0;
+		begin
+			offers[id][:number] = offer.xpath("Количество").text
+		rescue => error
+		end
 		offer.xpath("Цены/Цена").each do |price|
-		  if price.xpath("Валюта").text == "RUB"
-		      offers[id][:price] = price.xpath("ЦенаЗаЕдиницу").text
+		  begin
+		    if price.xpath("Валюта").text == "RUB"
+		        offers[id][:price] = price.xpath("ЦенаЗаЕдиницу").text
+		    end
+		  rescue => error
 		  end
 		end
 	  end
