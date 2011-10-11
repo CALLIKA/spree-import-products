@@ -12,6 +12,11 @@ class Admin::ProductImportsController < Admin::BaseController
     @product_import = ProductImport.new
   end
 
+  def clear
+    system("rake tmp:clear &")
+    redirect_to :action => :new
+  end
+
 
   def create
     @product_import = ProductImport.create(params[:product_import])
